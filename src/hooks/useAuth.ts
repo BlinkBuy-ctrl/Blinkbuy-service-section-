@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext, useRef, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import type { User } from "@supabase/supabase-js";
 
 export interface AuthContextType {
@@ -37,10 +37,11 @@ function normalizeProfile(data: Record<string, unknown>): Record<string, unknown
 export function useAuthState(): AuthContextType {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<any | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  // If Supabase is not configured, skip loading entirely — show app immediately
+  const [isLoading, setIsLoading] = useState(isSupabaseConfigured);
   const lastFetchedUserId = useRef<string | null>(null);
   const isFetchingRef = useRef(false);
-  const initResolvedRef = useRef(false);
+  const initResolvedRef = useRef(!isSupabaseConfigured); // already resolved if not configured
 
   const fetchProfile = useCallback(async (userId: string, force = false): Promise<void> => {
     if (!force && lastFetchedUserId.current === userId) return;
@@ -48,7 +49,7 @@ export function useAuthState(): AuthContextType {
     isFetchingRef.current = true;
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
+      const timer = setTimeout(() => controller.abort(), 5000); // reduced from 8s to 5s
       const { data, error } = await supabase
         .from("profiles")
         .select("*")
@@ -68,12 +69,33 @@ export function useAuthState(): AuthContextType {
   }, []);
 
   useEffect(() => {
+    // If Supabase is not configured, don't subscribe — show app immediately
+    if (!isSupabaseConfigured) {
+      setIsLoading(false);
+      return;
+    }
+
+    // Hard safety timeout reduced to 4s (was 10s — too slow, causes blank screen perception)
     const safetyTimer = setTimeout(() => {
-      if (!initResolvedRef.current) { initResolvedRef.current = true; setIsLoading(false); }
-    }, 10000);
+      if (!initResolvedRef.current) {
+        initResolvedRef.current = true;
+        setIsLoading(false);
+      }
+    }, 4000);
+
+    let resolved = false;
+    const resolveInit = () => {
+      if (!resolved && !initResolvedRef.current) {
+        resolved = true;
+        initResolvedRef.current = true;
+        clearTimeout(safetyTimer);
+        setIsLoading(false);
+      }
+    };
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setUser(session?.user ?? null);
+
       if (session?.user) {
         if (["INITIAL_SESSION", "SIGNED_IN", "USER_UPDATED", "TOKEN_REFRESHED"].includes(event)) {
           await fetchProfile(session.user.id, event === "TOKEN_REFRESHED" || event === "SIGNED_IN");
@@ -83,24 +105,26 @@ export function useAuthState(): AuthContextType {
         isFetchingRef.current = false;
         setProfile(null);
       }
+
       if (event === "INITIAL_SESSION" || event === "SIGNED_OUT") {
-        if (!initResolvedRef.current) {
-          initResolvedRef.current = true;
-          clearTimeout(safetyTimer);
-          setIsLoading(false);
-        }
+        resolveInit();
       }
     });
 
-    return () => { clearTimeout(safetyTimer); subscription.unsubscribe(); };
+    return () => {
+      clearTimeout(safetyTimer);
+      subscription.unsubscribe();
+    };
   }, [fetchProfile]);
 
   const login = async (email: string, password: string) => {
+    if (!isSupabaseConfigured) throw new Error("Backend not configured yet. Check back soon!");
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw new Error(error.message);
   };
 
   const register = async (data: RegisterData) => {
+    if (!isSupabaseConfigured) throw new Error("Backend not configured yet. Check back soon!");
     const { data: signUpData, error } = await supabase.auth.signUp({
       email: data.email,
       password: data.password,
@@ -114,6 +138,7 @@ export function useAuthState(): AuthContextType {
   };
 
   const logout = async () => {
+    if (!isSupabaseConfigured) return;
     await supabase.auth.signOut();
     lastFetchedUserId.current = null;
     isFetchingRef.current = false;
