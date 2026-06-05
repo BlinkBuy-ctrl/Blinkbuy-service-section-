@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, isSupabaseConfigured } from "./supabase";
 import { cache } from "./cache";
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,111 @@ export interface ServicesQuery {
   limit?: number;
 }
 
+// Demo data shown when backend is not yet configured
+const DEMO_SERVICES = [
+  {
+    id: "demo-1",
+    title: "Professional Plumbing Services",
+    description: "Expert plumbing repairs, installations, and maintenance for homes and offices across Lilongwe.",
+    category: "Home & Property Services",
+    location: "Lilongwe",
+    price: 15000,
+    priceType: "fixed",
+    priceDisplay: "MK 15,000",
+    isOnline: true,
+    isFeatured: true,
+    rating: 4.8,
+    reviewCount: 24,
+    worker: { id: "w1", name: "Chisomo Banda", isVerified: true, isTrusted: false, isBoosted: true, isOnline: true },
+  },
+  {
+    id: "demo-2",
+    title: "Mathematics & Science Tutoring",
+    description: "MSCE and university level tutoring in Mathematics, Physics, and Chemistry. Online and in-person.",
+    category: "Education & Skills",
+    location: "Blantyre",
+    price: 5000,
+    priceType: "per_hour",
+    priceDisplay: "MK 5,000/hr",
+    isOnline: true,
+    isFeatured: false,
+    rating: 4.5,
+    reviewCount: 12,
+    worker: { id: "w2", name: "Tiwonge Phiri", isVerified: true, isTrusted: true, isBoosted: false, isOnline: false },
+  },
+  {
+    id: "demo-3",
+    title: "Motorcycle Delivery — Same Day",
+    description: "Fast, reliable same-day delivery across Lilongwe and surrounding areas. Available 7 days a week.",
+    category: "Transport & Delivery",
+    location: "Lilongwe",
+    price: 2000,
+    priceType: "per_trip",
+    priceDisplay: "From MK 2,000",
+    isOnline: false,
+    isFeatured: false,
+    rating: 4.2,
+    reviewCount: 38,
+    worker: { id: "w3", name: "Peter Kamanga", isVerified: false, isTrusted: false, isBoosted: false, isOnline: true },
+  },
+  {
+    id: "demo-4",
+    title: "Web Design & Development",
+    description: "Modern, mobile-friendly websites for businesses. Logo design, branding, and social media setup included.",
+    category: "Digital & Online Services",
+    location: "Zomba",
+    price: 80000,
+    priceType: "fixed",
+    priceDisplay: "From MK 80,000",
+    isOnline: true,
+    isFeatured: true,
+    rating: 5.0,
+    reviewCount: 7,
+    worker: { id: "w4", name: "Grace Mwale", isVerified: true, isTrusted: true, isBoosted: true, isOnline: true },
+  },
+  {
+    id: "demo-5",
+    title: "House Cleaning & Laundry",
+    description: "Thorough home cleaning, laundry, ironing, and general housekeeping. Weekly and monthly packages available.",
+    category: "Home & Property Services",
+    location: "Mzuzu",
+    price: 8000,
+    priceType: "per_visit",
+    priceDisplay: "MK 8,000/visit",
+    isOnline: false,
+    isFeatured: false,
+    rating: 4.6,
+    reviewCount: 19,
+    worker: { id: "w5", name: "Abigail Tembo", isVerified: false, isTrusted: true, isBoosted: false, isOnline: false },
+  },
+  {
+    id: "demo-6",
+    title: "Carpentry & Furniture Making",
+    description: "Custom furniture, repairs, and woodwork. Beds, wardrobes, tables, and doors crafted to order.",
+    category: "Home & Property Services",
+    location: "Blantyre",
+    price: 25000,
+    priceType: "from",
+    priceDisplay: "From MK 25,000",
+    isOnline: false,
+    isFeatured: false,
+    rating: 4.3,
+    reviewCount: 15,
+    worker: { id: "w6", name: "Moses Chirwa", isVerified: true, isTrusted: false, isBoosted: false, isOnline: false },
+  },
+];
+
 export async function fetchServices(params: ServicesQuery = {}): Promise<{ services: any[]; total: number }> {
+  // Show demo data if backend not configured yet
+  if (!isSupabaseConfigured) {
+    const { search, category, location } = params;
+    let results = [...DEMO_SERVICES];
+    if (search) results = results.filter(s => s.title.toLowerCase().includes(search.toLowerCase()));
+    if (category && category !== "All Categories") results = results.filter(s => s.category === category);
+    if (location && location !== "All Locations") results = results.filter(s => s.location === location);
+    return { services: results, total: results.length };
+  }
+
   const {
     search, category, location, isOnline,
     minPrice, maxPrice,
@@ -87,11 +191,9 @@ export async function fetchServices(params: ServicesQuery = {}): Promise<{ servi
   if (minPrice) q = q.gte("price", minPrice);
   if (maxPrice) q = q.lte("price", maxPrice);
 
-  // Pagination
   const from = (page - 1) * limit;
   q = q.range(from, from + limit - 1);
 
-  // Sort
   switch (sortBy) {
     case "rating":     q = q.order("rating", { ascending: false }); break;
     case "price_asc":  q = q.order("price", { ascending: true }); break;
@@ -103,11 +205,14 @@ export async function fetchServices(params: ServicesQuery = {}): Promise<{ servi
   if (error) throw new Error(error.message);
 
   const result = { services: (data ?? []).map(normalizeService), total: count ?? 0 };
-  cache.set(cacheKey, result, 2 * 60 * 1000); // 2 min cache
+  cache.set(cacheKey, result, 2 * 60 * 1000);
   return result;
 }
 
 export async function fetchServiceById(id: string): Promise<any> {
+  if (!isSupabaseConfigured) {
+    return DEMO_SERVICES.find(s => s.id === id) ?? null;
+  }
   const { data, error } = await supabase
     .from("services")
     .select("*, profiles(*)")
@@ -118,6 +223,7 @@ export async function fetchServiceById(id: string): Promise<any> {
 }
 
 export async function fetchServiceReviews(serviceId: string): Promise<any[]> {
+  if (!isSupabaseConfigured) return [];
   const { data, error } = await supabase
     .from("reviews")
     .select("*, profiles(*)")
@@ -158,7 +264,6 @@ export async function createService(form: {
     .single();
   if (error) throw new Error(error.message);
   cache.clearPrefix("services");
-  // Broadcast notification
   await supabase.from("notifications").insert({
     user_id: null,
     type: "new_service",
@@ -202,6 +307,7 @@ export async function getOrCreateConversation(otherUserId: string): Promise<stri
 }
 
 export async function trackServiceView(serviceId: string, workerId: string): Promise<void> {
+  if (!isSupabaseConfigured) return;
   try {
     const raw = `${navigator.userAgent}${screen.width}x${screen.height}${new Date().toDateString()}`;
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
@@ -212,6 +318,6 @@ export async function trackServiceView(serviceId: string, workerId: string): Pro
       p_hash: hash,
     });
   } catch {
-    // Fire-and-forget — never blocks UI
+    // Fire-and-forget
   }
 }
